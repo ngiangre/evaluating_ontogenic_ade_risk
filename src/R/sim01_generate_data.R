@@ -394,42 +394,8 @@ compute_prr <- function(pair,dat_new){
 
 }
 
-# Compute stage by drug reporting interaction within GLM 
-compute_glm_f <- function(dat_new){
-
-  dat_new[,stage_col] <- factor(dat_new[,stage_col,with=F] %>% unlist %>% unname,levels=1:length(stages))
-
-  glm_mod <- glm(E ~ nichd:D,data=dat_new,family=binomial(link="logit"))
-
-  glm_mod
-
-}
-
-# Compute stage by drug reporting (spline) interaction within GAM
-compute_gam <- function(dat_new,bs_="cs"){
-
-  nknots <- c(
-    length(unique(dat_new[,get(stage_col)]))
-  )
-
-  #bs="cs" gives lower AIC and df - a better fit model
-  bam_mod <-
-    gam(E ~ s(get(stage_col),
-              by=D,
-              bs=bs_,
-              k=nknots[1]),
-        data=dat_new,
-        knots = list(x=unique(dat_new[,stage_col,with=F]) %>% unlist %>% unname),
-        family=binomial(link="logit"),
-        nthreads=1
-    )
-
-  bam_mod
-
-}
-
 # Compute stage by drug reporting (spline) interaction within discretized GAM
-compute_bam <- function(dat_new,bs_="cs"){
+compute_gam <- function(dat_new,bs_="cs"){
   
   nknots <- c(
     length(unique(dat_new[,get(stage_col)]))
@@ -449,107 +415,6 @@ compute_bam <- function(dat_new,bs_="cs"){
   
   bam_mod
   
-}
-
-# Compute stage by drug reporting interaction within GAM
-compute_bam_te <- function(dat_new,bs_="cs"){
-  
-  nknots <- c(
-    length(unique(dat_new[,get(stage_col)]))
-  )
-  
-  bam_mod <-
-    bam(E ~ te(get(stage_col),by=D,bs=bs_,k=nknots[1]),
-        data=dat_new,
-        knots = list(x=unique(dat_new[,stage_col,with=F]) %>% unlist %>% unname),
-        family=binomial(link="logit"),
-        discrete=T,nthreads=1
-    )
-  
-  bam_mod
-  
-}
-
-# Process GLM model data
-process_glm_model <- function(glm_mod,dat_new,drug_id,rx_id,drug_name,rx_name,ej,fij,knots,coef_str="factor(nichd)",time_=3){
-
-  scores_glm_dt <- data.table(stage = knots,
-                              glm_score =
-                                coef(glm_mod,complete=T)[
-                                  grepl(coef_str,
-                                        names(coef(glm_mod,complete=T)),fixed=T)
-                                  ],
-                              glm_score_se =
-                                sqrt(diag(vcov(glm_mod)))[
-                                  grepl(coef_str,
-                                        names(sqrt(diag(vcov(glm_mod)))),fixed=T)
-                                  ],
-                              N = dat_new[,.N,by=stage_col]$N
-  )
-  setnames(scores_glm_dt,c("stage"),c(stage_col))
-  scores_glm_dt[[stage_col]] <- as.factor(category_levels[[stage_col]])
-
-  # Mapping GLM data to categories
-  # for summarizing column counts
-  dat_new[,(x_cols[1])] <-
-    dat_new[,lapply(.SD,function(x){category_levels[[x_cols[1]]][x]}),.SDcols=x_cols[1]]
-  dat_agg <-
-    dat_new[,
-            lapply(.SD,function(x){sum(x==1)}),
-            by=stage_col,
-            .SDcols=c(e_col,d_col,de_col)
-            ] %>%
-    pivot_longer(-!!as.name(stage_col)) %>%
-    data.table()
-  dat_agg[[stage_col]] <- factor(dat_agg[[stage_col]] %>% unlist %>% unname,
-                                 levels=category_levels[[stage_col]])
-
-  tmp <- scores_glm_dt
-  tmp$si2 <- scores_glm_dt[,.(si2 =  sum( (glm_score - mean(glm_score) )^2,na.rm=T ) * (1/(N-1)))]$si2
-  sp2 <- tmp[,sum( (N-1)*si2,na.rm=T ) / sum( (N-1),na.rm=T )]
-
-  all_score_glm_dt <- data.table("all", scores_glm_dt[,sum(glm_score*N,na.rm=T)/sum(N,na.rm=T)],sqrt(sp2),nrow(dat_new))
-  colnames(all_score_glm_dt) <- c(stage_col,"glm_score","glm_score_se","N")
-  scores_glm_dt <- bind_rows(scores_glm_dt,all_score_glm_dt)
-  #scores_glm_dt$glm_score <- scores_glm_dt[,exp(glm_score)]
-  scores_glm_dt$glm_score_90mse <-
-    scores_glm_dt[,.(glm_score_90mse = glm_score - (1.645*(glm_score_se)))]$glm_score_90mse
-  scores_glm_dt$glm_score_95mse <-
-    scores_glm_dt[,.(glm_score_95mse = glm_score - (1.96*(glm_score_se)))]$glm_score_95mse
-  scores_glm_dt$glm_score_99mse <-
-    scores_glm_dt[,.(glm_score_99mse = glm_score - (2.576*(glm_score_se)))]$glm_score_99mse
-  scores_glm_dt$glm_score_999mse <-
-    scores_glm_dt[,.(glm_score_999mse = glm_score - (3.291*(glm_score_se)))]$glm_score_999mse
-  scores_glm_dt$glm_score_90pse <-
-    scores_glm_dt[,.(glm_score_90pse = glm_score + (1.645*(glm_score_se)))]$glm_score_90pse
-  scores_glm_dt$glm_score_95pse <-
-    scores_glm_dt[,.(glm_score_95pse = glm_score + (1.96*(glm_score_se)))]$glm_score_95pse
-  scores_glm_dt$glm_score_99pse <-
-    scores_glm_dt[,.(glm_score_99pse = glm_score + (2.576*(glm_score_se)))]$glm_score_99pse
-  scores_glm_dt$glm_score_999pse <-
-    scores_glm_dt[,.(glm_score_999pse = glm_score + (3.291*(glm_score_se)))]$glm_score_999pse
-
-  stage_dat_agg <- dat_agg[,.(value=sum(value,na.rm=T)),by=c(stage_col,"name")] %>% dcast(get(stage_col) ~ name)
-  colnames(stage_dat_agg)[1] <- stage_col
-  all_dat_agg <- dat_agg[,.(value=sum(value,na.rm=T)),by=c("name")]
-  all_dat_agg[[stage_col]] <- "all"
-  all_dat_agg <- all_dat_agg %>% dcast(get(stage_col) ~ name)
-  colnames(all_dat_agg)[1] <- stage_col
-  dat_agg <- bind_rows(stage_dat_agg,all_dat_agg)
-  # Joining mapped glm data
-  # to glm results
-  joined <- inner_join(scores_glm_dt,dat_agg,by=stage_col) %>% data.table()
-  joined[,drug_col] = drug_id
-  joined[,rx_col] = rx_id
-  joined[,drug_col_name] = drug_name
-  joined[,rx_col_name] = rx_name
-  joined[,"Ej"] = ej
-  joined[,"Fij"] = fij
-  joined[,"Tij"] = fij * ej
-  joined[,"AIC"] = glm_mod$aic
-  joined[,"time"] = time_
-
-  joined
 }
 
 # Process GAM model data
@@ -637,38 +502,6 @@ process_gam_model <- function(bam_mod,dat_new,drug_id,rx_id,drug_name,rx_name,ej
   joined
 }
 
-# Extract GAM model specs
-extract_gam_glance <- function(bam_mod){
-
-  glance_gam <- broom::glance(bam_mod) %>% data.table()
-  summary_bam <- summary.gam(bam_mod)
-  glance_gam$rsq = summary_bam$r.sq
-  glance_gam$fREML <- as.numeric(summary_bam$sp.criterion)
-  glance_gam$deviance_explained <- summary_bam$dev.expl
-  glance_gam[,drug_col] = drug_id
-  glance_gam[,rx_col] = rx_id
-  glance_gam[,drug_col_name] = drug_name
-  glance_gam[,rx_col_name] = rx_name
-
-  glance_gam
-
-}
-
-# Extract GAM parameter specs 
-extract_gam_tidy <- function(bam_mod){
-
-  tidy_gam <- broom::tidy(bam_mod,parametric=F) %>%
-    bind_rows(broom::tidy(bam_mod,parametric=T)) %>%
-    data.table()
-  tidy_gam[,drug_col] = drug_id
-  tidy_gam[,rx_col] = rx_id
-  tidy_gam[,drug_col_name] = drug_name
-  tidy_gam[,rx_col_name] = rx_name
-
-  tidy_gam
-
-}
-
 # Main function that collects applied method results in list
 compute_risk_and_process_data <- function(pair,dat_new,ej=NA,fij=NA){
     # Extract ADE IDs and names
@@ -676,50 +509,19 @@ compute_risk_and_process_data <- function(pair,dat_new,ej=NA,fij=NA){
     rx_id <- pair[2]
     drug_name <- all_data[atc_concept_id==drug_id,unique(atc_concept_name)]
     rx_name <- all_data[meddra_concept_id==rx_id,unique(meddra_concept_name)]
-
+    
     time_ <- system.time(gam_mod <- compute_gam(dat_new))
     gam_cs <- process_gam_model(
       gam_mod,
       dat_new,
       drug_id,rx_id,drug_name,rx_name,ej,fij,
       unique(dat_new[,stage_col,with=F]) %>% unlist %>% unname,
-      coef_str="s(get(stage_col)):D.",time_[3],pad="_g"
-    )
-    time_ <- system.time(bam_mod <- compute_bam(dat_new))
-    bam_cs <- process_gam_model(
-      bam_mod,
-      dat_new,
-      drug_id,rx_id,drug_name,rx_name,ej,fij,
-      unique(dat_new[,stage_col,with=F]) %>% unlist %>% unname,
       coef_str="s(get(stage_col)):D.",time_[3]
     )
-    time_ <- system.time(gam_mod <- compute_bam_te(dat_new))
-    bam_te_cs <- process_gam_model(
-      gam_mod,
-      dat_new,
-      drug_id,rx_id,drug_name,rx_name,ej,fij,
-      unique(dat_new[,stage_col,with=F]) %>% unlist %>% unname,
-      coef_str="te(get(stage_col)):D.",time_[3],pad="_te"
-    )
-    # time_ <- system.time(glm_mod <- compute_glm_f(dat_new))
-    # glm_f <- process_glm_model(
-    #   glm_mod,
-    #   dat_new,
-    #   drug_id,rx_id,drug_name,rx_name,ej,fij,
-    #   unique(dat_new[,stage_col,with=F]) %>% unlist %>% unname,
-    #   coef_str="nichd",time_[3]
-    # )
-
     # Output list of summarized datta objects
     lst = list(
-      #"gam_glance" = extract_gam_glance(compute_gam(pair,dat_new)),
-      #"gam_tidy" = extract_gam_tidy(compute_gam(pair,dat_new)),
-      #"glm" = glm_f,
-      "gam" = bam_cs,
-      "gam_g" = gam_cs,
-      "gam_te" = bam_te_cs, 
+      "gam" = gam_cs,
       "prr" = compute_prr(pair,dat_new)
-      #"rrr" = compute_rrr(pair,dat_new)
     )
 
 }
@@ -771,7 +573,7 @@ spikein_cols = c("uniform","increase","decrease","plateau","inverse_plateau")
 # Go through each dynamics class
 for(spikein_col in spikein_cols){
   cat("\nSpike in: ",spikein_col,"\n")
-  # Parallize through each ADE pair
+  # Parallelize through each ADE pair
   lst = foreach(i=1:nrow(positive_ade_pairs)) %dopar% {
     # Set random number generator seed
     set.seed(i)
@@ -907,11 +709,11 @@ cat("\n",round(as.numeric(difftime(t1,t0,units="mins")),2)," minutes\n")
 
 
 
-# Calculate sensitivity analysis for single ADE -----------------------------------------------------
-cat("\nEvent reporting reduction, single ADE\n")
+# Calculate drug report sensitivity analysis for single ADE -----------------------------------------------------
+cat("\nDrug report reduction, single ADE\n")
 #
-# Applying detection methods to augmented ADE data at reduced event rates
-# A single positive ADE pairs
+# Applying detection methods to augmented ADE data after removing drug reports from
+# a single positive ADE pairs
 #
 
 # Define global variables
@@ -940,11 +742,12 @@ stages_to_reduce <- category_levels[[stage_col]]
 prr_dts <- NULL
 gam_dts <- NULL
 for(stage_to_reduce in stages_to_reduce){
-
+  
   # Get pair ids
   pair <- positive_ade_pairs[i] %>% unlist %>% unname
-  # Format ADE data - get "old" event reporting
+  # Format ADE data - get "old" reporting
   dat = set_ade_pair(ade_data,pair)
+  d_old <- dat[,get(d_col)]
   e_old <- dat[,get(e_col)]
   # Define reporting rate
   ej = mean(e_old)
@@ -965,56 +768,48 @@ for(stage_to_reduce in stages_to_reduce){
     dat_new[E==1 & D==1,de_col] <- 1
     # Define event reporting after data simulation/augmentation
     e_new <- dat_new[,get(e_col)]
-
+    
     lsts <- list()
     # Percentiles for data reduction
     step=0.1
     qs <- seq(0,1,step)
-    # Reduce event reporting only at stage and apply detecction methods
+    # Reduce drug reporting only at stage and apply detecction methods
     for(q in qs){
       cat("\nPercent reduction at ",stage_to_reduce,": ",q,"\n")
-      # define reduced data container
-      dat_q <- dat_new
-
-      # Define event indices to sample
-      stage_to_reduce_indices <- which(dat_q[,get(stage_col)==which(category_levels[[stage_col]]==stage_to_reduce)])
-      stages_not_to_reduce_indices <- which(dat_q[,get(stage_col)!=which(category_levels[[stage_col]]==stage_to_reduce)])
-      event_indices <- intersect(which(e_new==1),stage_to_reduce_indices)
-      event_at_other_stages_indices <- intersect(which(e_new==1),stages_not_to_reduce_indices)
-      # Create new event reporting vector
-      e_q <- rep(0,length(e_new))
-      e_q[event_at_other_stages_indices] <- 1
-      # Sample reports with events per percentile rediction
-      sampled_event_indices <-
+      # Define drug indices to remove
+      stage_to_reduce_indices <- 
+        which(dat_new[,get(stage_col)==which(category_levels[[stage_col]]==stage_to_reduce)])
+      drug_indices <- intersect(which(d_old==1),stage_to_reduce_indices)
+      drug_indices_to_remove <-
         sample(
-          event_indices,
-          floor(q*length(event_indices)),
+          drug_indices,
+          floor(q*length(drug_indices)),
           replace = F
         )
-      # Insert sampled event reporting into event vector
-      if(length(sampled_event_indices)>0)e_q[sampled_event_indices] <- 1
-      dat_q[,e_col] <- e_q
-      dat_q[E==1 & D==1,de_col] <- 1
-      dat_q[E==0,de_col] <- 0
-
+      # define reduced data container
+      dat_q <- 
+        dat_new[
+          setdiff(1:nrow(dat_new),drug_indices_to_remove)
+          ]
+      
       # Format simulated ADE data
       dat_q$Di = dat_q[,mean(D)]
       dat_q$Ej = dat_q[,mean(E)]
       dat_q$Fij = fij
       dat_q$Tij = ej_fij
-      dat_q$random_state = rs
+      dat_q$random_state = rs[setdiff(1:nrow(dat_new),drug_indices_to_remove)]
       dat_q$random_seed = i
       dat_q[,c(drug_col) := list(pair[1])]
       dat_q[,c(rx_col) := list(pair[2])]
       # Apply ADE detection methods and attribute data reduction
       lst = compute_risk_and_process_data(pair,dat_q,ej,fij)
       for(x in names(lst)){
-        lst[[x]]$percent_event_reduction = (1-q)*100
+        lst[[x]]$percent_drug_report_reduction = (1-q)*100
       }
-
+      
       lsts[[as.character(q)]] <- lst
     }
-
+    
     gam_dt <- lapply(lsts,
                      function(x){x$gam}
     ) %>%
@@ -1022,7 +817,7 @@ for(stage_to_reduce in stages_to_reduce){
       .[nichd!="all"]
     gam_dt$spikein <- spikein_col
     gam_dt$stage_reduced <- stage_to_reduce
-
+    
     prr_dt <- lapply(lsts,
                      function(x){x$prr}
     ) %>%
@@ -1030,14 +825,14 @@ for(stage_to_reduce in stages_to_reduce){
       .[nichd!="all"]
     prr_dt$spikein <- spikein_col
     prr_dt$stage_reduced <- stage_to_reduce
-
+    
     gam_dts <- bind_rows(gam_dts,gam_dt)
     prr_dts <- bind_rows(prr_dts,prr_dt)
   }
   # Get algorithm end time
   t1 = Sys.time()
   cat("\n",round(as.numeric(difftime(t1,t0,units="mins")),2)," minutes\n")
-
+  
 }
 # Get algorithm end time
 t1 = Sys.time()
@@ -1045,13 +840,14 @@ cat("\n",round(as.numeric(difftime(t1,t0,units="mins")),2)," minutes\n")
 
 
 gam_dts %>%
-  fwrite(paste0(data_dir,basename,"generate_data_single_gam_event_reduction_data.csv"))
+  fwrite(paste0(data_dir,basename,"generate_data_single_gam_drug_report_reduction_data.csv"))
 
 prr_dts %>%
-  fwrite(paste0(data_dir,basename,"generate_data_single_prr_event_reduction_data.csv"))
+  fwrite(paste0(data_dir,basename,"generate_data_single_prr_drug_report_reduction_data.csv"))
 
-# Calculate sensitivity analysis for all ADEs n all stages -----------------------------------------------------
-cat("\nEvent reporting reduction, all stages, sample of positive ades\n")
+
+# Calculate drug report sensitivity analysis for all ADEs n all stages -----------------------------------------------------
+cat("\nDrug reporting reduction, all stages, sample of positive ades\n")
 
 # Define global variables
 d_col="D"
@@ -1077,18 +873,19 @@ spikein_cols = c("increase","decrease","plateau","inverse_plateau")
 stage_dts <- NULL
 # define indices for ADE pairs - used for testing but in use should be all pairs
 inds <- sample(1:nrow(positive_ade_pairs),nrow(positive_ade_pairs),replace=F)
-for(stage_to_reduce in stages_to_reduce){
+for(stage_to_reduce in stages_to_reduce[6:7]){
   dts <- NULL
   for(spikein_col in spikein_cols){
     cat("\nPercent reduction at ",stage_to_reduce," for ",spikein_col," dynamics class\n")
     # Parallelize through each ADE pairs
-    dt <- foreach(i=inds,.combine="rbind") %dopar% {
+    dt <- foreach(i=inds,.combine="rbind",.errorhandling = "remove") %dopar% {
       # Set random number generator seed
       set.seed(i)
       # Get pair ids
       pair <- positive_ade_pairs[i] %>% unlist %>% unname
-      # Format ADE data - get "old" event reporting vector
+      # Format ADE data - get "old" reporting vectors
       dat = set_ade_pair(ade_data,pair)
+      d_old <- dat[,get(d_col)]
       e_old <- dat[,get(e_col)]
       # Define reporting rate
       ej = mean(e_old)
@@ -1104,49 +901,42 @@ for(stage_to_reduce in stages_to_reduce){
       dat_new[D==1,e_col] <- max_vec(e_old,e_new)[dat_new$D==1]
       dat_new[E==1 & D==1,de_col] <- 1
       e_new <- dat_new[,get(e_col)]
-
+      
       lsts <- list()
       # Percentiles for data reduction
       step=0.1
       qs <- seq(0,1,step)
       # Reduce event reporting only at stage and apply detecction methods
       for(q in qs){
-        # define reduced data container
-        dat_q <- dat_new
-        # Define event indices to sample
-        stage_to_reduce_indices <- which(dat_q[,get(stage_col)==which(category_levels[[stage_col]]==stage_to_reduce)])
-        stages_not_to_reduce_indices <- which(dat_q[,get(stage_col)!=which(category_levels[[stage_col]]==stage_to_reduce)])
-        event_indices <- intersect(which(e_new==1),stage_to_reduce_indices)
-        event_at_other_stages_indices <- intersect(which(e_new==1),stages_not_to_reduce_indices)
-        # Create new event reporting vector
-        e_q <- rep(0,length(e_old))
-        e_q[event_at_other_stages_indices] <- 1
-        # Sample reports with events per percentile rediction
-        sampled_event_indices <- 
+        # Define drug indices to remove
+        stage_to_reduce_indices <- 
+          which(dat_new[,get(stage_col)==which(category_levels[[stage_col]]==stage_to_reduce)])
+        drug_indices <- intersect(which(d_old==1),stage_to_reduce_indices)
+        drug_indices_to_remove <-
           sample(
-            event_indices,
-            floor(q*length(event_indices)),
+            drug_indices,
+            floor(q*length(drug_indices)),
             replace = F
           )
-        # Insert sampled event reporting into event vector
-        if(length(sampled_event_indices)>0)e_q[sampled_event_indices] <- 1
-        dat_q[,e_col] <- e_q
-        dat_q[E==1 & D==1,de_col] <- 1
-        dat_q[E==0,de_col] <- 0
+        # define reduced data container
+        dat_q <- 
+          dat_new[
+            setdiff(1:nrow(dat_new),drug_indices_to_remove)
+          ]
         
         # Format simulated ADE data
         dat_q$Di = dat_q[,mean(D)]
         dat_q$Ej = dat_q[,mean(E)]
         dat_q$Fij = fij
         dat_q$Tij = ej_fij
-        dat_q$random_state = rs
+        dat_q$random_state = rs[setdiff(1:nrow(dat_q),drug_indices_to_remove)]
         dat_q$random_seed = i
         dat_q[,c(drug_col) := list(pair[1])]
         dat_q[,c(rx_col) := list(pair[2])]
         # Apply ADE detection methods and attribute data reduction
         lst = compute_risk_and_process_data(pair,dat_q,ej,fij)
         for(x in names(lst)){
-          lst[[x]]$percent_event_reduction = (1-q)*100
+          lst[[x]]$percent_drug_report_reduction = (1-q)*100
         }
         
         lsts[[as.character(q)]] <- lst
@@ -1157,18 +947,21 @@ for(stage_to_reduce in stages_to_reduce){
       ) %>%
         bind_rows() %>%
         .[nichd!="all"]
-
+      
       prr_dt <- lapply(lsts,
                        function(x){x$prr}
       ) %>%
         bind_rows() %>%
         .[nichd!="all"]
-
+      
       dt <-
         merge(
-          prr_dt[,c(drug_col,rx_col,stage_col,"a","b","c","d","PRR","PRR_90mse","percent_event_reduction"),with=F],
-          gam_dt[,c(drug_col,rx_col,stage_col,"D","E","DE","gam_score","gam_score_90mse","percent_event_reduction"),with=F],
-          by=c(drug_col,rx_col,stage_col,"percent_event_reduction")
+          prr_dt[,c(drug_col,rx_col,stage_col,"a","b","c","d","PRR",
+                    "PRR_90mse","PRR_90pse","percent_drug_report_reduction"),with=F],
+          gam_dt[,c(drug_col,rx_col,stage_col,"D","E","DE",
+                    "gam_score","gam_score_90mse","gam_score_90pse",
+                    "percent_drug_report_reduction"),with=F],
+          by=c(drug_col,rx_col,stage_col,"percent_drug_report_reduction")
         )
       dt$ade <- paste0(dt$atc_concept_id,"_",dt$meddra_concept_id)
       dt$spikein <- spikein_col
@@ -1183,7 +976,7 @@ for(stage_to_reduce in stages_to_reduce){
   stage_dts <- bind_rows(stage_dts,dts)
   
   dts %>% 
-    fwrite(paste0(data_dir,basename,"generate_",stage_to_reduce,"_data_event_reduction_data.csv"))
+    fwrite(paste0(data_dir,basename,"generate_",stage_to_reduce,"_data_drug_report_reduction_data.csv"))
   
   # Get algorithm end time
   t1 = Sys.time()
@@ -1194,94 +987,4 @@ t1 = Sys.time()
 cat("\n",round(as.numeric(difftime(t1,t0,units="mins")),2)," minutes\n")
 
 stage_dts %>%
-  fwrite(paste0(data_dir,basename,"generate_data_event_reduction_data.csv"))
-
-# DEPRECATED DE reporting after fold change --------------------------
-# 
-# d_col="D"
-# e_col="E"
-# de_col="DE"
-# stage_col="nichd"
-# x_cols=c(stage_col,"age")
-# all_data = raw_data
-# stage_age = raw_data[,.(nichd,age)] %>% unique()
-# seed=1
-# set.seed(seed)
-# spikein_col="increase"
-# fcs = c(1,2)
-# pair <- positive_ade_pairs[12] %>% unlist %>% unname
-# 
-# simulated_data <- function(dat_new,fij,spikein_col,stage_age=raw_data[,.(nichd,age)] %>% unique() ){
-#   d_old <- dat_new[,get(d_col)]
-#   e_old <- dat_new[,get(e_col)]
-#   ej <-  mean(e_old)
-#   ej_fij <- ej * fij
-#   stage_age$probs <-  define_report_probs(spikein_col,nrow(stage_age),ej_fij)
-#   rs <- merge(dat_new,stage_age,by="age")$probs
-#   e_new <- rbinom(nrow(dat_new),1,rs)
-#   dat_new[D==1,"E"] <- max_vec(e_old,e_new)[dat_new$D==1]
-#   dat_new[E==1 & D==1,"DE"] <- 1
-#   dat_new
-# }
-# 
-# test <- function(pairs,fcs,spikein_col,all_data = raw_data,stage_age = raw_data[,.(nichd,age)] %>% unique(),x_cols=c(stage_col,"age"),d_col="D",e_col="E",de_col="DE",stage_col="nichd",seed=1){
-#   set.seed(seed)
-#   tmps <- foreach(i=1:nrow(pairs),.combine = "rbind") %dopar% {
-#     pair <- pairs[i] %>% unlist %>% unname
-#     dat = make_pair_data(pair)
-#     tmps <- NULL
-#     for(fij in fcs){
-#       dat_new <- simulated_data(dat,fij,spikein_col=spikein_col)
-#       tmp = dat_new[,.(DE = sum(D==1 & E==1),
-#                        pD = mean(D==1),
-#                        pE = mean(E==1),
-#                        pDE = mean(D==1 & E==1),
-#                        D = sum(D==1),
-#                        E = sum(E==1)),
-#                     nichd]
-#       tmp$pDE_pDpE <- tmp$pDE/(tmp$pD*tmp$pE)
-#       tmp$fold_change <- fij
-#       tmp[,drug_col] <- pair[1]
-#       tmp[,rx_col] <- pair[2]
-#       tmp$dynamic <- spikein_col
-#       tmps <- bind_rows(tmps,tmp)
-#     }
-#     tmps
-#   }
-#   tmps
-# }
-# 
-# dat <- test(positive_ade_pairs[14],c(1,2,3,4,5,6,7,8,9,10),"increase")
-# dat$ade <- paste0(dat$atc_concept_id,"_",dat$meddra_concept_id)
-# dat$nichd <- factor(dat$nichd,labels=c("term_neonatal","infancy","toddler","early_childhood","middle_childhood","early_adolescence","late_adolescence"))
-# 
-# dat %>%
-#   pivot_longer(cols=c("D","E","DE")) %>%
-#   ggplot(aes(nichd,value,color=fold_change)) +
-#   geom_point() +
-#   geom_path(aes(group=fold_change)) +
-#   facet_grid(name~.,scales="free") +
-#   scale_colour_gradient2(low = "blue", mid="white",midpoint=5, high = "red") +
-#   ylab("Number of reports\n(D==drug, E==event, DE=drug, event") +
-#   xlab("")
-# 
-# dat <-
-#   bind_rows(
-#     test(positive_ade_pairs[14],c(1,2,3,4,5,6,7,8,9,10),"uniform"),
-#     test(positive_ade_pairs[14],c(1,2,3,4,5,6,7,8,9,10),"increase"),
-#     test(positive_ade_pairs[14],c(1,2,3,4,5,6,7,8,9,10),"decrease"),
-#     test(positive_ade_pairs[14],c(1,2,3,4,5,6,7,8,9,10),"plateau"),
-#     test(positive_ade_pairs[14],c(1,2,3,4,5,6,7,8,9,10),"inverse_plateau")
-#   )
-# dat$ade <- paste0(dat$atc_concept_id,"_",dat$meddra_concept_id)
-# dat$nichd <- factor(dat$nichd,labels=c("term_neonatal","infancy","toddler","early_childhood","middle_childhood","early_adolescence","late_adolescence"))
-# 
-# dat[,lapply(.SD,median),.(nichd,fold_change,dynamic),.SDcols=c("D","E","DE")] %>%
-#   pivot_longer(cols=c("D","E","DE")) %>%
-#   ggplot(aes(nichd,value,color=fold_change)) +
-#   geom_point() +
-#   geom_path(aes(group=fold_change)) +
-#   facet_grid(name~dynamic,scales="free") +
-#   scale_colour_gradient2(low = "blue", mid="white",midpoint=5, high = "red") +
-#   ylab("Median of reports across ADEs\n(D==drug, E==event, DE=drug, event") +
-#   xlab("")
+  fwrite(paste0(data_dir,basename,"generate_data_drug_report_reduction_data.csv"))
